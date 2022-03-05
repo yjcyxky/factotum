@@ -57,7 +57,7 @@ use std::fs::File;
 use std::collections::HashMap;
 use std::error::Error;
 
-mod factotum;
+pub mod factotum;
 
 const PROC_SUCCESS: i32 = 0;
 const PROC_PARSE_ERROR: i32 = 1;
@@ -743,10 +743,6 @@ fn init_logger() -> Result<(), String> {
     let log_config = try!(get_log_config());
     log4rs::init_config(log_config).map_err(|e| format!("couldn't initialize log configuration. Reason: {}", e.description()))
 }
-
-// fn main() {
-//     std::process::exit(factotum())
-// }
 
 pub fn factotum() -> i32 {
     if let Err(log) = init_logger() {
