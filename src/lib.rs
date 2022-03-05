@@ -30,7 +30,6 @@ extern crate libc;
 extern crate ifaces;
 extern crate dns_lookup;
 
-use docopt::Docopt;
 use std::fs;
 use factotum::executor::task_list::{Task, State};
 use factotum::factfile::Factfile;
@@ -50,7 +49,7 @@ use std::env;
 use hyper::Url;
 use std::sync::mpsc;
 use std::net;
-use rustc_serialize::json::{self, Json, ToJson};
+use rustc_serialize::json::{self, Json};
 use std::collections::BTreeMap;
 #[cfg(test)]
 use std::fs::File;
@@ -63,54 +62,6 @@ const PROC_SUCCESS: i32 = 0;
 const PROC_PARSE_ERROR: i32 = 1;
 const PROC_EXEC_ERROR: i32 = 2;
 const PROC_OTHER_ERROR: i32 = 3;
-
-const CONSTRAINT_HOST: &'static str = "host";
-
-const VERSION: &'static str = env!("CARGO_PKG_VERSION");
-const USAGE: &'static str =
-    "
-Factotum.
-
-Usage:
-  factotum run <factfile> [--start=<start_task>] [--env=<env>] [--dry-run] [--no-colour] [--webhook=<url>] [--tag=<tag>]... [--constraint=<constraint>]... [--max-stdouterr-size=<bytes>]
-  factotum validate <factfile> [--no-colour]
-  factotum dot <factfile> [--start=<start_task>] [--output=<output_file>] [--overwrite] [--no-colour]
-  factotum (-h | --help) [--no-colour]
-  factotum (-v | --version) [--no-colour]
-
-Options:
-  -h --help                             Show this screen.
-  -v --version                          Display the version of Factotum and exit.
-  --start=<start_task>                  Begin at specified task.
-  --env=<env>                           Supply JSON to define mustache variables in Factfile.
-  --dry-run                             Pretend to execute a Factfile, showing the commands that would be executed. Can be used with other options.
-  --output=<output_file>                File to print output to. Used with `dot`.
-  --overwrite                           Overwrite the output file if it exists.
-  --no-colour                           Turn off ANSI terminal colours/formatting in output.
-  --webhook=<url>                       Post updates on job execution to the specified URL.
-  --tag=<tag>                           Add job metadata (tags).
-  --constraint=<constraint>             Checks for an external constraint that will prevent execution; allowed constraints (host).
-  --max-stdouterr-size=<bytes>          The maximum size of the individual stdout/err sent via the webhook functions for job updates.
-";
-
-#[derive(Debug, RustcDecodable)]
-struct Args {
-    flag_start: Option<String>,
-    flag_env: Option<String>,
-    flag_output: Option<String>,
-    flag_webhook: Option<String>,
-    flag_overwrite: bool,
-    flag_dry_run: bool,
-    flag_no_colour: bool,
-    flag_tag: Option<Vec<String>>,
-    flag_constraint: Option<Vec<String>>,
-    flag_max_stdouterr_size: Option<usize>,
-    arg_factfile: String,
-    flag_version: bool,
-    cmd_run: bool,
-    cmd_validate: bool,
-    cmd_dot: bool,
-}
 
 // macro to simplify printing to stderr
 // https://github.com/rust-lang/rfcs/issues/1078
@@ -275,7 +226,7 @@ fn get_task_results_str(task_results: &Vec<&Task<&FactfileTask>>) -> (String, St
     (stdout, stderr)
 }
 
-fn validate_start_task(job: &Factfile, start_task: &str) -> Result<(), &'static str> {
+pub fn validate_start_task(job: &Factfile, start_task: &str) -> Result<(), &'static str> {
     // A
     // / \
     // B   C
@@ -528,14 +479,14 @@ fn write_to_file(filename: &str, contents: &str, overwrite: bool) -> Result<(), 
     }
 }
 
-fn is_valid_url(url: &str) -> Result<(), String> {
+pub fn is_valid_url(url: &str) -> Result<(), String> {
     if url.starts_with("http://") || url.starts_with("https://") {
         match Url::parse(url) {
             Ok(_) => Ok(()),
             Err(msg) => Err(format!("{}", msg)),
         }
     } else {
-        Err("URL must begin with 'http://' or 'https://' to be used with Factotum webhooks".into())
+        Err("URL must begin with 'http://' or 'https://'.".into())
     }
 }
 
@@ -744,151 +695,13 @@ fn init_logger() -> Result<(), String> {
     log4rs::init_config(log_config).map_err(|e| format!("couldn't initialize log configuration. Reason: {}", e.description()))
 }
 
-pub fn factotum() -> i32 {
-    if let Err(log) = init_logger() {
-        println!("Log initialization error: {}", log);
-        return PROC_OTHER_ERROR;
-    }
-
-    let args: Args = match Docopt::new(USAGE).and_then(|d| d.decode()) {
-        Ok(a) => a,
-        Err(e) => {
-            print!("{}", e);
-            return PROC_OTHER_ERROR;
-        }
-    };
-
-    let tag_map = if let Some(tags) = args.flag_tag {
-        Some(get_tag_map(&tags))
-    } else {
-        None
-    };
-
-    // Environment should always be present as tags can populate the env
-    let env_str: String = if let Some(c) = args.flag_env {
-        c
-    } else {
-        "{}".to_string()
-    };
-
-    let env_json: Option<Json> = {
-        match json_str_to_btreemap(&env_str) {
-            Ok(mut a) => {
-                if let Some(tm) = tag_map.as_ref() {
-                    for (key, value) in tm {
-                        let tag_key = format!("tag:{}", key.to_string());
-                        a.insert(tag_key, value.to_string());
-                    }
-                }
-
-                match str_to_json(&json::encode(&a).unwrap()) {
-                    Ok(a) => {
-                        Some(a)
-                    }
-                    Err(e) => {
-                        print!("{}", e);
-                        return PROC_OTHER_ERROR;
-                    }
-                }
-            }
-            Err(e) => {
-                print!("{}", e);
-                return PROC_OTHER_ERROR;
-            }
-        }
-    };
-
-    if args.flag_no_colour {
-        env::set_var("CLICOLOR", "0");
-    }
-
-    if args.flag_version {
-        println!("Factotum version {}", VERSION);
-        return PROC_SUCCESS;
-    }
-
-    if args.flag_dry_run && args.flag_webhook.is_some() {
-        println!("{}",
-                 "Error: --webhook cannot be used with the --dry-run option".red());
-        return PROC_OTHER_ERROR;
-    }
-
-    if let Some(ref wh) = args.flag_webhook {
-        if let Err(msg) = is_valid_url(&wh) {
-            println!("{}",
-                     format!("Error: the specifed webhook URL \"{}\" is invalid. Reason: {}",
-                             wh,
-                             msg)
-                         .red());
-            return PROC_OTHER_ERROR;
-        }
-    }
-
-    if args.cmd_run {
-        if let Some(constraints) = args.flag_constraint {
-            let c_map = get_constraint_map(&constraints);
-
-            if let Some(host_value) = c_map.get(CONSTRAINT_HOST) {
-                if let Err(msg) = is_valid_host(host_value) {
-                    println!("{}",
-                             format!("Warn: the specifed host constraint \"{}\" did not match, \
-                                      no tasks have been executed. Reason: {}",
-                                     host_value,
-                                     msg)
-                                 .yellow());
-                    return PROC_SUCCESS;
-                }
-            }
-        }
-
-        if !args.flag_dry_run {
-            parse_file_and_execute(&args.arg_factfile,
-                                   env_json,
-                                   args.flag_start,
-                                   args.flag_webhook,
-                                   tag_map,
-                                   args.flag_max_stdouterr_size)
-        } else {
-            parse_file_and_simulate(&args.arg_factfile, env_json, args.flag_start)
-        }
-    } else if args.cmd_validate {
-        match validate(&args.arg_factfile, env_json) {
-            Ok(msg) => {
-                println!("{}", msg);
-                PROC_SUCCESS
-            }
-            Err(msg) => {
-                println!("{}", msg);
-                PROC_PARSE_ERROR
-            }
-        }
-    } else if args.cmd_dot {
-        match dot(&args.arg_factfile, args.flag_start) {
-            Ok(dot) => {
-                if let Some(output_file) = args.flag_output {
-                    match write_to_file(&output_file, &dot, args.flag_overwrite) {
-                        Ok(_) => {
-                            println!("{}", "File written successfully".green());
-                            PROC_SUCCESS
-                        }
-                        Err(m) => {
-                            print_err!("{}{}", "Error: ".red(), m.red());
-                            PROC_OTHER_ERROR
-                        }                        
-                    }
-                } else {
-                    print!("{}", dot);
-                    PROC_SUCCESS
-                }
-            }
-            Err(msg) => {
-                print_err!("{} {}", "Error:".red(), msg.red());
-                PROC_OTHER_ERROR
-            }
-        }
-    } else {
-        unreachable!("Unknown subcommand!")
-    }
+pub fn execute_dag(factfile: &str, webhook_url: Option<String>) -> i32 {
+    parse_file_and_execute(factfile,
+        None,
+        None,
+        webhook_url,
+        None,
+        None)
 }
 
 #[test]
